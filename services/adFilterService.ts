@@ -92,17 +92,49 @@ export class AdFilterService {
         continue;
       }
 
-      // 5. 处理其他以 # 开头的标签 (直接保留)
+      // 5. 处理 Master Playlist 中的 Stream Inf (#EXT-X-STREAM-INF)
+      if (line.startsWith('#EXT-X-STREAM-INF:')) {
+        filteredLines.push(line);
+        // 下一行是子 M3U8 的 URL
+        if (i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          const nextLineTrimmed = nextLine.trim();
+          
+          // 1. 先转为绝对路径
+          const absoluteUrl = this.resolveUrl(baseUrlDir, nextLineTrimmed);
+          
+          // 2. 再包装成代理地址 (递归调用代理)
+          // 格式: http://127.0.0.1:12346/m3u8-proxy?url=ENCODED_URL
+          const proxyUrl = `http://127.0.0.1:12346/m3u8-proxy?url=${encodeURIComponent(absoluteUrl)}`;
+          
+          filteredLines.push(proxyUrl);
+          i += 2;
+          continue;
+        }
+      }
+
+      // 6. 处理其他以 # 开头的标签 (直接保留)
       if (line.startsWith('#')) {
         filteredLines.push(line);
         i++;
         continue;
       }
 
-      // 6. 处理纯 URI 行 (如果没有被 EXTINF 捕获到的情况，虽然标准 M3U8 不太可能)
-      // 但为了健壮性，如果遇到非 # 开头的行，我们认为是 URI
+      // 7. 处理纯 URI 行 (如果没有被 EXTINF 捕获到的情况)
+      // 这种情况可能是：
+      // a) Master Playlist 中的备用流 (无 #EXT-X-STREAM-INF 前缀，但这种情况很少见)
+      // b) 错误的格式
+      // 我们还是尝试代理它，以防万一
       const absoluteUrl = this.resolveUrl(baseUrlDir, trimmedLine);
-      filteredLines.push(absoluteUrl);
+      
+      // 如果它看起来像是一个 .m3u8 链接，我们也走代理
+      if (absoluteUrl.includes('.m3u8')) {
+        const proxyUrl = `http://127.0.0.1:12346/m3u8-proxy?url=${encodeURIComponent(absoluteUrl)}`;
+        filteredLines.push(proxyUrl);
+      } else {
+        // 普通分片，直接用绝对路径
+        filteredLines.push(absoluteUrl);
+      }
       i++;
     }
 
