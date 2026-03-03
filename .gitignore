@@ -26,3 +26,4 @@ web/**
 .roomodes
 yarn-errors.log
 coverage/
+artifacts
