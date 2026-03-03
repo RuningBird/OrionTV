@@ -19,15 +19,22 @@ interface HttpResponse {
   body: string;
 }
 
-type RequestHandler = (request: HttpRequest) => HttpResponse | Promise<HttpResponse>;
+export type RequestHandler = (request: HttpRequest) => HttpResponse | Promise<HttpResponse>;
 
 class TCPHttpServer {
   private server: TcpSocket.Server | null = null;
   private isRunning = false;
   private requestHandler: RequestHandler | null = null;
+  private routes: { method: string, path: string, handler: RequestHandler }[] = [];
 
   constructor() {
     this.server = null;
+  }
+
+  // 注册路由 (支持精确匹配和前缀匹配)
+  // path 可以是 "/api/v1" 这样的精确路径，也可以是 "/proxy*" 这样的通配符
+  public registerRoute(method: string, path: string, handler: RequestHandler) {
+    this.routes.push({ method: method.toUpperCase(), path, handler });
   }
 
   private parseHttpRequest(data: string): HttpRequest | null {
@@ -98,6 +105,38 @@ class TCPHttpServer {
     this.requestHandler = handler;
   }
 
+  // 内部路由分发逻辑
+  private async dispatchRequest(request: HttpRequest): Promise<HttpResponse> {
+    // 1. 优先检查已注册的路由
+    for (const route of this.routes) {
+      if (route.method === request.method || route.method === '*') {
+        // 精确匹配
+        if (route.path === request.url) {
+          return await route.handler(request);
+        }
+        // 通配符匹配 (简单的 startsWith)
+        if (route.path.endsWith('*')) {
+          const prefix = route.path.slice(0, -1);
+          if (request.url.startsWith(prefix)) {
+            return await route.handler(request);
+          }
+        }
+      }
+    }
+
+    // 2. 如果没有匹配路由，回退到默认的 requestHandler (保持兼容性)
+    if (this.requestHandler) {
+      return await this.requestHandler(request);
+    }
+
+    // 3. 都没有，返回 404
+    return {
+      statusCode: 404,
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'Not Found'
+    };
+  }
+
   public async start(): Promise<string> {
     const netState = await NetInfo.fetch();
     let ipAddress: string | null = null;
@@ -129,8 +168,9 @@ class TCPHttpServer {
             if (requestData.includes('\r\n\r\n')) {
               try {
                 const request = this.parseHttpRequest(requestData);
-                if (request && this.requestHandler) {
-                  const response = await this.requestHandler(request);
+                if (request) {
+                  // 使用分发逻辑替代直接调用 requestHandler
+                  const response = await this.dispatchRequest(request);
                   const httpResponse = this.formatHttpResponse(response);
                   socket.write(httpResponse);
                 } else {

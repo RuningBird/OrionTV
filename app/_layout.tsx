@@ -68,13 +68,10 @@ export default function RootLayout() {
   }, [loaded, lastCheckTime, checkForUpdate]);
 
   useEffect(() => {
-    // 只有在非手机端才启动远程控制服务器
-    if (remoteInputEnabled && responsiveConfig.deviceType !== "mobile") {
-      startServer();
-    } else {
-      stopServer();
-    }
-  }, [remoteInputEnabled, startServer, stopServer, responsiveConfig.deviceType]);
+    // 始终尝试启动服务，因为它是 M3U8 播放代理(去广告)的基础设施，同时也用于远程控制
+    // 不再受限于 remoteInputEnabled 或 deviceType
+    startServer();
+  }, [startServer]);
 
   if (!loaded && !error) {
     return null;

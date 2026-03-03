@@ -1,7 +1,9 @@
 import TCPHttpServer from "./tcpHttpServer";
 import Logger from '@/utils/Logger';
+import { AdFilterService } from './adFilterService';
 
 const logger = Logger.withTag('RemoteControl');
+const adLogger = Logger.withTag('AdProxy');
 
 const getRemotePageHTML = () => {
   return `
@@ -60,58 +62,115 @@ class RemoteControlService {
   }
 
   private setupRequestHandler() {
-    this.httpServer.setRequestHandler((request) => {
-      logger.debug("[RemoteControl] Received request:", request.method, request.url);
+    // 1. 注册遥控器页面
+    this.httpServer.registerRoute('GET', '/', async () => {
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+        body: getRemotePageHTML(),
+      };
+    });
 
+    // 2. 注册消息接口
+    this.httpServer.registerRoute('POST', '/message', async (request) => {
       try {
-        if (request.method === "GET" && request.url === "/") {
-          return {
-            statusCode: 200,
-            headers: { "Content-Type": "text/html; charset=utf-8" },
-            body: getRemotePageHTML(),
-          };
-        } else if (request.method === "POST" && request.url === "/message") {
-          try {
-            const parsedBody = JSON.parse(request.body || "{}");
-            const message = parsedBody.message;
-            if (message) {
-              this.onMessage(message);
-            }
-            return {
-              statusCode: 200,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ status: "ok" }),
-            };
-          } catch (parseError) {
-            logger.info("[RemoteControl] Failed to parse message body:", parseError);
-            return {
-              statusCode: 400,
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ error: "Invalid JSON" }),
-            };
-          }
-        } else if (request.method === "POST" && request.url === "/handshake") {
-          this.onHandshake();
-          return {
-            statusCode: 200,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "ok" }),
-          };
-        } else {
-          return {
-            statusCode: 404,
-            headers: { "Content-Type": "text/plain" },
-            body: "Not Found",
-          };
+        const parsedBody = JSON.parse(request.body || "{}");
+        const message = parsedBody.message;
+        if (message) {
+          this.onMessage(message);
         }
-      } catch (error) {
-        logger.info("[RemoteControl] Request handler error:", error);
         return {
-          statusCode: 500,
+          statusCode: 200,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ error: "Internal Server Error" }),
+          body: JSON.stringify({ status: "ok" }),
+        };
+      } catch (parseError) {
+        logger.info("[RemoteControl] Failed to parse message body:", parseError);
+        return {
+          statusCode: 400,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ error: "Invalid JSON" }),
         };
       }
+    });
+
+    // 3. 注册握手接口
+    this.httpServer.registerRoute('POST', '/handshake', async () => {
+      this.onHandshake();
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "ok" }),
+      };
+    });
+
+    // 4. 注册 M3U8 去广告代理接口
+    // URL 格式: /m3u8-proxy?url=http%3A%2F%2Fexample.com%2Fvideo.m3u8
+    this.httpServer.registerRoute('GET', '/m3u8-proxy*', async (request) => {
+      const urlParams = request.url.split('?')[1];
+      if (!urlParams) {
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'text/plain' },
+          body: 'Missing url parameter'
+        };
+      }
+
+      // 简单的 query string 解析
+      const params = new URLSearchParams(urlParams);
+      const targetUrl = params.get('url');
+
+      if (!targetUrl) {
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'text/plain' },
+          body: 'Invalid url parameter'
+        };
+      }
+
+      adLogger.debug(`Proxying request for: ${targetUrl}`);
+
+      try {
+        const response = await fetch(targetUrl);
+        if (!response.ok) {
+          return {
+            statusCode: response.status,
+            headers: { 'Content-Type': 'text/plain' },
+            body: `Upstream error: ${response.statusText}`
+          };
+        }
+
+        const content = await response.text();
+        
+        // 执行去广告和路径重写
+        const filteredContent = AdFilterService.filterAdsAndRewritePaths(content, targetUrl);
+
+        return {
+          statusCode: 200,
+          headers: {
+            'Content-Type': 'application/vnd.apple.mpegurl', // 标准 M3U8 MIME type
+            'Access-Control-Allow-Origin': '*',
+          } as { [key: string]: string },
+          body: filteredContent
+        };
+      } catch (error) {
+        adLogger.error('Proxy error:', error);
+        return {
+          statusCode: 500,
+          headers: { 'Content-Type': 'text/plain' },
+          body: `Proxy error: ${error}`
+        };
+      }
+    });
+
+    // 兼容旧逻辑 (虽然现在主要依靠 registerRoute，但为了保险起见，保留默认 handler 处理未匹配路由)
+    this.httpServer.setRequestHandler((request) => {
+      logger.debug("[RemoteControl] Unhandled request:", request.method, request.url);
+      return {
+        statusCode: 404,
+        headers: { "Content-Type": "text/plain" },
+        body: "Not Found"
+      };
     });
   }
 
