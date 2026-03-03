@@ -50,20 +50,25 @@ export class AdFilterService {
 
       // 3. 处理 #EXTINF 行 (这是分片信息的开始)
       if (line.includes('#EXTINF:')) {
-        // 检查下一行 (URI 行)
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          const nextLineTrimmed = nextLine.trim();
+        // 寻找下一个非空行作为 URL 行
+        let urlLineIndex = i + 1;
+        while (urlLineIndex < lines.length && !lines[urlLineIndex].trim()) {
+          urlLineIndex++;
+        }
+
+        if (urlLineIndex < lines.length) {
+          const urlLine = lines[urlLineIndex];
+          const urlLineTrimmed = urlLine.trim();
           
           // 检查 URI 是否包含广告关键字
           const containsAdKeyword = adKeywords.some(keyword =>
-            nextLineTrimmed.toLowerCase().includes(keyword.toLowerCase())
+            urlLineTrimmed.toLowerCase().includes(keyword.toLowerCase())
           );
 
           if (containsAdKeyword) {
-            logger.debug(`[AdFilter] Removing ad segment: ${nextLineTrimmed}`);
-            // 跳过 EXTINF 行和 URI 行
-            i += 2;
+            logger.debug(`[AdFilter] Removing ad segment: ${urlLineTrimmed}`);
+            // 跳过 EXTINF 行到 URL 行之间的所有内容
+            i = urlLineIndex + 1;
             continue;
           }
 
@@ -72,10 +77,10 @@ export class AdFilterService {
           filteredLines.push(line);
           
           // 处理 URI 行
-          const absoluteUrl = this.resolveUrl(baseUrlDir, nextLineTrimmed);
+          const absoluteUrl = this.resolveUrl(baseUrlDir, urlLineTrimmed);
           filteredLines.push(absoluteUrl);
           
-          i += 2;
+          i = urlLineIndex + 1;
           continue;
         }
       }
