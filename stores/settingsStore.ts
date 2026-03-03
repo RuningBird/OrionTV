@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { SettingsManager } from "@/services/storage";
 import { api, ServerConfig } from "@/services/api";
 import { storageConfig } from "@/services/storageConfig";
+import { AdFilterService } from '@/services/adFilterService';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Logger from "@/utils/Logger";
 
@@ -67,6 +68,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         storageConfig.setStorageType(config.StorageType);
         set({ serverConfig: config });
       }
+
+      // 获取自定义去广告代码
+      const baseUrl = get().apiBaseUrl;
+      if (baseUrl) {
+        try {
+          const response = await fetch(`${baseUrl}/api/ad-filter?full=true`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.code) {
+              AdFilterService.setCustomAdFilterCode(data.code);
+              logger.info('Fetched and set custom ad filter code');
+            }
+          }
+        } catch (error) {
+          logger.warn('Failed to fetch custom ad filter code:', error);
+        }
+      }
+
     } catch (error) {
       set({ serverConfig: null });
       logger.error("Failed to fetch server config:", error);

@@ -3,6 +3,37 @@ import Logger from '@/utils/Logger';
 const logger = Logger.withTag('AdFilterService');
 
 export class AdFilterService {
+  private static customAdFilterCode: string | null = null;
+  private static customFunction: Function | null = null;
+
+  public static setCustomAdFilterCode(code: string) {
+    if (!code || !code.trim()) {
+      this.customAdFilterCode = null;
+      this.customFunction = null;
+      return;
+    }
+
+    try {
+      this.customAdFilterCode = code;
+      
+      // 移除 TypeScript 类型注解,转换为纯 JavaScript (与 TTV 逻辑保持一致)
+      const jsCode = code
+        .replace(/(\w+)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*([,)])/g, '$1$3')
+        .replace(/\)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*\{/g, ') {')
+        .replace(/(const|let|var)\s+(\w+)\s*:\s*(string|number|boolean|any|void|never|unknown|object)\s*=/g, '$1 $2 =');
+
+      // 创建并缓存自定义函数
+      // eslint-disable-next-line no-new-func
+      this.customFunction = new Function('type', 'm3u8Content',
+        jsCode + '\nreturn filterAdsFromM3U8(type, m3u8Content);'
+      );
+      logger.info('Custom ad filter code loaded successfully');
+    } catch (error) {
+      logger.error('Failed to parse custom ad filter code:', error);
+      this.customFunction = null;
+    }
+  }
+
   /**
    * 过滤 M3U8 内容中的广告并修正相对路径
    * @param m3u8Content 原始 M3U8 内容
@@ -12,6 +43,31 @@ export class AdFilterService {
   public static filterAdsAndRewritePaths(m3u8Content: string, baseUrl: string): string {
     if (!m3u8Content) return '';
 
+    // 1. 尝试执行自定义去广告代码
+    let processedContent = m3u8Content;
+    if (this.customFunction) {
+      try {
+        // 尝试推断 type (从 baseUrl 中提取域名作为简单的 type 标识，或者传空)
+        const urlObj = new URL(baseUrl);
+        const type = urlObj.hostname; // 简单传递 hostname，也许有用
+        
+        const result = this.customFunction(type, m3u8Content);
+        if (result && typeof result === 'string') {
+          processedContent = result;
+          logger.debug('Custom ad filter applied');
+        }
+      } catch (error) {
+        logger.warn('Custom ad filter execution failed, falling back to default:', error);
+        // Fallback to original content
+        processedContent = m3u8Content;
+      }
+    }
+
+    // 2. 执行默认去广告逻辑 (如果是自定义代码已经处理过的，这里再次处理也无害，主要是为了路径重写)
+    // 注意：如果自定义代码已经去除了广告，这里的 keyword check 应该不会误伤
+    // 如果自定义代码没有去除干净，这里还可以补刀
+    // 最重要的是路径重写必须执行
+    
     // 广告关键字列表 (与 Web 端保持一致)
     const adKeywords = [
       'sponsor',
@@ -23,7 +79,7 @@ export class AdFilterService {
       'redtraffic'
     ];
 
-    const lines = m3u8Content.split('\n');
+    const lines = processedContent.split('\n');
     const filteredLines: string[] = [];
 
     // 获取 base URL 的目录部分，用于相对路径拼接
